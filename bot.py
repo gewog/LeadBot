@@ -40,8 +40,8 @@ bot = telebot.TeleBot(TOKEN)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_stats.db")
 
-# Ключ xAI для модели Grok 3 mini (опционально)
-XAI_API_KEY = (config.get("XAI_API_KEY") or "").strip()
+# Ключ xAI для модели Grok 3 mini (опционально; поддерживаются XAI_API_KEY и AI_API_KEY)
+XAI_API_KEY = (config.get("XAI_API_KEY") or config.get("AI_API_KEY") or "").strip()
 GROK_MODEL = "grok-3-mini"
 
 
