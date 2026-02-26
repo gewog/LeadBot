@@ -1,0 +1,31 @@
+# Python / Virtualenv
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local data / runtime artifacts
+bot_stats.db
+statistic.txt
+
+# Secrets / configs
+.env
+
+# Git
+.git/
+
