@@ -1,56 +1,46 @@
-
 import os
 import sqlite3
-from datetime import datetime, timedelta
-
+from datetime import datetime, timedelta, UTC
 import telebot
 from telebot import types
 from dotenv import dotenv_values
-
-# Опционально: Grok (xAI) для ответов на произвольные вопросы
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+import requests
 
 config = dotenv_values(".env")
 
-
-# ID администратора, которому будет видна кнопка "Статистика" (из .env)
+# ID администратора
 ADMIN_ID = int(config.get("ADMIN_ID") or config.get("ADMIN_ID_SECRET") or 0)
 
-# Получаем токен бота из файла .env
+# Токен бота
 TOKEN = config["TELEGRAM_BOT_TOKEN"]
 
 if not TOKEN:
-    raise RuntimeError(
-        "Не задан токен бота в .env (ключ TELEGRAM_BOT_TOKEN).\n"
-        "Добавьте его в .env и перезапустите скрипт."
-    )
+    raise RuntimeError("Не задан токен бота в .env (ключ TELEGRAM_BOT_TOKEN).")
 
 if not ADMIN_ID:
-    raise RuntimeError(
-        "Не задан ID администратора в .env (ключ ADMIN_ID или ADMIN_ID_SECRET).\n"
-        "Добавьте числовой Telegram ID в .env и перезапустите скрипт."
-    )
-
+    raise RuntimeError("Не задан ID администратора в .env (ключ ADMIN_ID или ADMIN_ID_SECRET).")
 
 bot = telebot.TeleBot(TOKEN)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_stats.db")
 
-# Ключ xAI для модели Grok 3 mini (опционально; поддерживаются XAI_API_KEY и AI_API_KEY)
-XAI_API_KEY = (config.get("XAI_API_KEY") or config.get("AI_API_KEY") or "").strip()
-GROK_MODEL = "grok-3-mini"
 
+
+# YandexGPT API
+YANDEX_FOLDER_ID = (config.get("YANDEX_FOLDER_ID") or os.environ.get("YANDEX_FOLDER_ID") or "").strip()
+YANDEX_API_KEY = (config.get("YANDEX_API_KEY") or os.environ.get("YANDEX_API_KEY") or "").strip()
+# Исправленный endpoint для YandexGPT
+YANDEXGPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+
+# --- База данных ---
 
 def init_db() -> None:
     """Создаёт таблицы для статистики, если их ещё нет."""
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.cursor()
-        # Агрегированная информация по пользователям
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -66,7 +56,6 @@ def init_db() -> None:
             )
             """
         )
-        # Подробные события для помесячной статистики
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS interactions (
@@ -77,7 +66,6 @@ def init_db() -> None:
             )
             """
         )
-        # Таблица для заявок с телефонами
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS applications (
@@ -91,7 +79,6 @@ def init_db() -> None:
             )
             """
         )
-        # Таблица для отслеживания сохранений месячной статистики
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS monthly_stats_saves (
@@ -107,10 +94,9 @@ def init_db() -> None:
     finally:
         conn.close()
 
-
 def _now_iso() -> str:
     """Текущее время в ISO-формате (UTC)."""
-    return datetime.utcnow().isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def track_user_interaction(message, button: str | None = None) -> None:
@@ -291,55 +277,67 @@ def is_phone_number(text: str) -> bool:
     return len(digits) >= 10
 
 
-def ask_grok(user_message: str) -> tuple[str | None, str | None]:
+# --- Исправленная функция для YandexGPT ---
+def ask_yandexgpt(user_message: str) -> tuple[str | None, str | None]:
     """
-    Отправляет вопрос пользователя в Grok 3 mini (xAI) и возвращает (ответ, ошибка_для_пользователя).
-    При успехе: (текст, None). При ошибке: (None, None) или (None, "сообщение") для известных кодов.
+    Отправляет вопрос пользователя в YandexGPT и возвращает (ответ, ошибка).
     """
-    if not XAI_API_KEY or not OpenAI:
+    if not YANDEX_FOLDER_ID or not YANDEX_API_KEY:
         return None, None
+
+    system_prompt = (
+        "Ты дружелюбный помощник в телеграм-боте компании. "
+        "Отвечай кратко и по делу на русском языке. "
+        "Если вопрос не по теме компании или продукта, вежливо ответь и предложи вернуться к кнопкам бота (О нас, Кейсы)."
+    )
+
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # Исправленная структура payload
+    payload = {
+        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
+        "messages": [
+            {"role": "system", "text": system_prompt},
+            {"role": "user", "text": user_message},
+        ],
+        "generationOptions": {
+            "maxTokens": 1000,
+            "temperature": 0.6,
+        },
+    }
+
     try:
-        client = OpenAI(
-            api_key=XAI_API_KEY,
-            base_url="https://api.x.ai/v1",
-        )
-        completion = client.chat.completions.create(
-            model=GROK_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты дружелюбный помощник в телеграм-боте компании. "
-                        "Отвечай кратко и по делу на русском языке. "
-                        "Если вопрос не по теме компании или продукта, вежливо ответь и предложи вернуться к кнопкам бота (О нас, Кейсы)."
-                    ),
-                },
-                {"role": "user", "content": user_message},
-            ],
-        )
-        reply = completion.choices[0].message.content
-        return (reply or "").strip() or None, None
-    except Exception as e:
-        # Вывод в консоль для диагностики
-        err_msg = str(e)
-        if hasattr(e, "status_code"):
-            err_msg = f"HTTP {getattr(e, 'status_code')}: {err_msg}"
-        if hasattr(e, "response") and getattr(e, "response", None):
+        r = requests.post(YANDEXGPT_URL, headers=headers, json=payload, timeout=30)
+        if r.status_code != 200:
+            err_body = r.text
             try:
-                body = e.response.json() if hasattr(e.response, "json") else str(e.response)
-                err_msg = f"{err_msg} | response: {body}"
+                err_body = r.json()
             except Exception:
                 pass
-        print(f"[Grok xAI] Ошибка: {err_msg}", flush=True)
-        # Понятные сообщения для типичных ошибок
-        if hasattr(e, "status_code"):
-            code = e.status_code
-            if code == 401:
-                return None, "Неверный API-ключ xAI. Проверьте ключ в .env (XAI_API_KEY или AI_API_KEY)."
-            if code == 402:
-                return None, "Недостаточно средств на счёте xAI. Пополните баланс в консоли: console.x.ai"
-            if code == 429:
-                return None, "Слишком много запросов к xAI. Подождите немного и попробуйте снова."
+            print(f"[YandexGPT] Ошибка HTTP {r.status_code}: {err_body}", flush=True)
+            if r.status_code == 401:
+                return None, "Неверный API-ключ Yandex Cloud. Проверьте YANDEX_API_KEY в .env."
+            if r.status_code == 403:
+                return None, "Доступ к YandexGPT запрещён. Проверьте права ключа и folder_id в консоли Yandex Cloud."
+            if r.status_code == 429:
+                return None, "Слишком много запросов к YandexGPT. Подождите и попробуйте снова."
+            if r.status_code == 404:
+                return None, "Сервис YandexGPT временно недоступен (404). Проверьте доступность API в консоли Yandex Cloud."
+            return None, None
+
+        data = r.json()
+        # Исправленная обработка ответа
+        reply = data.get("result", {}).get("alternatives", [])
+        if reply and len(reply) > 0:
+            text = reply[0].get("message", {}).get("text", "").strip()
+            return text or None, None
+        return None, None
+
+    except requests.exceptions.RequestException as e:
+        print(f"[YandexGPT] Ошибка запроса: {e}", flush=True)
         return None, None
 
 
@@ -635,18 +633,17 @@ def handle_text(message):
                 reply_markup=keyboard,
             )
         else:
-            # Произвольный текст: если подключён Grok — отвечаем через него
+            # Произвольный текст: если подключён YandexGPT — отвечаем через него
             track_user_interaction(message, button=None)
-            if XAI_API_KEY and OpenAI:
+            if YANDEX_FOLDER_ID and YANDEX_API_KEY:
                 bot.send_chat_action(message.chat.id, "typing")
-                grok_reply, grok_error = ask_grok(text)
-                if grok_reply:
-                    # Ограничиваем длину (лимит сообщения в Telegram ~4096)
-                    if len(grok_reply) > 4000:
-                        grok_reply = grok_reply[:3997] + "..."
-                    bot.send_message(message.chat.id, grok_reply)
+                reply, err = ask_yandexgpt(text)
+                if reply:
+                    if len(reply) > 4000:
+                        reply = reply[:3997] + "..."
+                    bot.send_message(message.chat.id, reply)
                 else:
-                    msg = grok_error or "Сейчас не удалось получить ответ. Попробуйте позже или выберите кнопку: «О нас» или «Кейсы»."
+                    msg = err or "Сейчас не удалось получить ответ. Попробуйте позже или выберите кнопку: «О нас» или «Кейсы»."
                     bot.send_message(message.chat.id, msg)
             else:
                 bot.send_message(

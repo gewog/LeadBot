@@ -22,7 +22,7 @@
 | <span style="color: #22863a">Telegram API</span> | pyTelegramBotAPI 4.30.0 |
 | <span style="color: #22863a">Конфигурация</span> | python-dotenv 1.0.1 |
 | <span style="color: #22863a">База данных</span> | SQLite (файл `bot_stats.db`) |
-| <span style="color: #22863a">Ответы на вопросы</span> | xAI Grok 3 mini (опционально, через OpenAI-совместимый API) |
+| <span style="color: #22863a">Ответы на вопросы</span> | YandexGPT (опционально, Yandex Cloud LLM API) |
 | <span style="color: #22863a">Контейнеризация</span> | Docker, Docker Compose |
 
 Зависимости перечислены в `requirements.txt`.
@@ -59,12 +59,13 @@ pip install -r requirements.txt
 ```env
 TELEGRAM_BOT_TOKEN=ваш_токен_от_BotFather
 ADMIN_ID=ваш_telegram_id_числом
-XAI_API_KEY=ваш_ключ_xAI
+YANDEX_FOLDER_ID=идентификатор_каталога_Yandex_Cloud
+YANDEX_API_KEY=ваш_API_ключ_Yandex_Cloud
 ```
 
 - <span style="color: #22863a">TELEGRAM_BOT_TOKEN</span> — токен от @BotFather.
 - <span style="color: #22863a">ADMIN_ID</span> — числовой Telegram ID пользователя-администратора (ему доступна кнопка «Статистика» и уведомления о заявках). Поддерживается также ключ <span style="color: #0366d6">ADMIN_ID_SECRET</span>.
-- <span style="color: #22863a">XAI_API_KEY</span> — ключ API xAI (необязательно). Если задан, бот отвечает на произвольные вопросы пользователя через модель <span style="color: #0366d6">Grok 3 mini</span>. Ключ создаётся в [xAI Console](https://console.x.ai/team/default/api-keys).
+- <span style="color: #22863a">YANDEX_FOLDER_ID</span> и <span style="color: #22863a">YANDEX_API_KEY</span> — данные Yandex Cloud (необязательно). Если заданы, бот отвечает на произвольные вопросы через <span style="color: #0366d6">YandexGPT</span>. Каталог (folder) и API-ключ создают в [консоли Yandex Cloud](https://console.cloud.yandex.ru); для ключа нужна роль с доступом к YandexGPT (например, `ai.languageModels.user`).
 
 Файл `.env` не должен попадать в репозиторий (указан в `.gitignore`).
 
@@ -114,7 +115,7 @@ docker-compose down
 4. **Кейсы** — показываются кейсы и предлагается оставить заявку; бот запрашивает телефон (кнопка «Отправить контакт» или ввод вручную). После ввода номера пользователь получает благодарность, заявка сохраняется в БД, администратору приходит уведомление с контактом и просьбой связаться.
 5. **Статистика** (только для администратора) — в чат выводится сводка за последние 30 дней: число пользователей, нажатия «О нас» и «Кейсы», всего сообщений.
 6. Команда <span style="color: #0366d6">/stats</span> — общая статистика за всё время (для любого пользователя).
-7. **Произвольный вопрос** — если в `.env` задан <span style="color: #0366d6">XAI_API_KEY</span>, на любой текст, не совпадающий с кнопками и не похожий на телефон, бот отвечает с помощью модели <span style="color: #0366d6">Grok 3 mini</span> (xAI). Без ключа бот предложит выбрать кнопку «О нас» или «Кейсы».
+7. **Произвольный вопрос** — если в `.env` заданы <span style="color: #0366d6">YANDEX_FOLDER_ID</span> и <span style="color: #0366d6">YANDEX_API_KEY</span>, на любой текст, не совпадающий с кнопками и не похожий на телефон, бот отвечает с помощью <span style="color: #0366d6">YandexGPT</span>. Без них бот предложит выбрать кнопку «О нас» или «Кейсы».
 8. 1-го числа каждого месяца при запуске бота статистика за предыдущий месяц дописывается в файл <span style="color: #22863a">statistic.txt</span>.
 
 Администратор задаётся в файле <span style="color: #b22222">.env</span> переменной <span style="color: #b22222">ADMIN_ID</span> (числовой Telegram ID).
@@ -145,7 +146,7 @@ docker-compose down
 Bot/
 ├── bot.py              # Основной код бота
 ├── requirements.txt    # Зависимости Python
-├── .env                # TELEGRAM_BOT_TOKEN и ADMIN_ID (создаётся вручную, в репозиторий не попадает)
+├── .env                # TELEGRAM_BOT_TOKEN, ADMIN_ID, при необходимости YANDEX_FOLDER_ID и YANDEX_API_KEY
 ├── .gitignore
 ├── .dockerignore
 ├── Dockerfile
