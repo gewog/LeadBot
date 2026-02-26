@@ -7,11 +7,17 @@ import telebot
 from telebot import types
 from dotenv import dotenv_values
 
+# Опционально: Grok (xAI) для ответов на произвольные вопросы
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
 config = dotenv_values(".env")
 
 
 # ID администратора, которому будет видна кнопка "Статистика" (из .env)
-ADMIN_ID = int(config["ADMIN_ID_SECRET"] or config["ADMIN_ID_SECRET"] or 0)
+ADMIN_ID = int(config.get("ADMIN_ID") or config.get("ADMIN_ID_SECRET") or 0)
 
 # Получаем токен бота из файла .env
 TOKEN = config["TELEGRAM_BOT_TOKEN"]
@@ -33,6 +39,10 @@ bot = telebot.TeleBot(TOKEN)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_stats.db")
+
+# Ключ xAI для модели Grok 3 mini (опционально)
+XAI_API_KEY = (config.get("XAI_API_KEY") or "").strip()
+GROK_MODEL = "grok-3-mini"
 
 
 def init_db() -> None:
@@ -279,6 +289,38 @@ def is_phone_number(text: str) -> bool:
     # Проверяем, что осталось достаточно цифр (минимум 10)
     digits = "".join(c for c in cleaned if c.isdigit())
     return len(digits) >= 10
+
+
+def ask_grok(user_message: str) -> str | None:
+    """
+    Отправляет вопрос пользователя в Grok 3 mini (xAI) и возвращает ответ.
+    Возвращает None при ошибке или если API не настроен.
+    """
+    if not XAI_API_KEY or not OpenAI:
+        return None
+    try:
+        client = OpenAI(
+            api_key=XAI_API_KEY,
+            base_url="https://api.x.ai/v1",
+        )
+        completion = client.chat.completions.create(
+            model=GROK_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты дружелюбный помощник в телеграм-боте компании. "
+                        "Отвечай кратко и по делу на русском языке. "
+                        "Если вопрос не по теме компании или продукта, вежливо ответь и предложи вернуться к кнопкам бота (О нас, Кейсы)."
+                    ),
+                },
+                {"role": "user", "content": user_message},
+            ],
+        )
+        reply = completion.choices[0].message.content
+        return (reply or "").strip() or None
+    except Exception:
+        return None
 
 
 def get_month_stats_for_period(year: int, month: int) -> tuple[int, int, int, int]:
@@ -573,12 +615,26 @@ def handle_text(message):
                 reply_markup=keyboard,
             )
         else:
-            # Любой другой текст тоже записываем как взаимодействие
+            # Произвольный текст: если подключён Grok — отвечаем через него
             track_user_interaction(message, button=None)
-            bot.send_message(
-                message.chat.id,
-                "Я тебя не понял. Пожалуйста, выбери одну из кнопок: «О нас» или «Кейсы».",
-            )
+            if XAI_API_KEY and OpenAI:
+                bot.send_chat_action(message.chat.id, "typing")
+                grok_reply = ask_grok(text)
+                if grok_reply:
+                    # Ограничиваем длину (лимит сообщения в Telegram ~4096)
+                    if len(grok_reply) > 4000:
+                        grok_reply = grok_reply[:3997] + "..."
+                    bot.send_message(message.chat.id, grok_reply)
+                else:
+                    bot.send_message(
+                        message.chat.id,
+                        "Сейчас не удалось получить ответ. Попробуйте позже или выберите кнопку: «О нас» или «Кейсы».",
+                    )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    "Я тебя не понял. Пожалуйста, выбери одну из кнопок: «О нас» или «Кейсы».",
+                )
 
 
 if __name__ == "__main__":
