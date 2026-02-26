@@ -291,13 +291,13 @@ def is_phone_number(text: str) -> bool:
     return len(digits) >= 10
 
 
-def ask_grok(user_message: str) -> str | None:
+def ask_grok(user_message: str) -> tuple[str | None, str | None]:
     """
-    Отправляет вопрос пользователя в Grok 3 mini (xAI) и возвращает ответ.
-    Возвращает None при ошибке или если API не настроен.
+    Отправляет вопрос пользователя в Grok 3 mini (xAI) и возвращает (ответ, ошибка_для_пользователя).
+    При успехе: (текст, None). При ошибке: (None, None) или (None, "сообщение") для известных кодов.
     """
     if not XAI_API_KEY or not OpenAI:
-        return None
+        return None, None
     try:
         client = OpenAI(
             api_key=XAI_API_KEY,
@@ -318,9 +318,29 @@ def ask_grok(user_message: str) -> str | None:
             ],
         )
         reply = completion.choices[0].message.content
-        return (reply or "").strip() or None
-    except Exception:
-        return None
+        return (reply or "").strip() or None, None
+    except Exception as e:
+        # Вывод в консоль для диагностики
+        err_msg = str(e)
+        if hasattr(e, "status_code"):
+            err_msg = f"HTTP {getattr(e, 'status_code')}: {err_msg}"
+        if hasattr(e, "response") and getattr(e, "response", None):
+            try:
+                body = e.response.json() if hasattr(e.response, "json") else str(e.response)
+                err_msg = f"{err_msg} | response: {body}"
+            except Exception:
+                pass
+        print(f"[Grok xAI] Ошибка: {err_msg}", flush=True)
+        # Понятные сообщения для типичных ошибок
+        if hasattr(e, "status_code"):
+            code = e.status_code
+            if code == 401:
+                return None, "Неверный API-ключ xAI. Проверьте ключ в .env (XAI_API_KEY или AI_API_KEY)."
+            if code == 402:
+                return None, "Недостаточно средств на счёте xAI. Пополните баланс в консоли: console.x.ai"
+            if code == 429:
+                return None, "Слишком много запросов к xAI. Подождите немного и попробуйте снова."
+        return None, None
 
 
 def get_month_stats_for_period(year: int, month: int) -> tuple[int, int, int, int]:
@@ -619,17 +639,15 @@ def handle_text(message):
             track_user_interaction(message, button=None)
             if XAI_API_KEY and OpenAI:
                 bot.send_chat_action(message.chat.id, "typing")
-                grok_reply = ask_grok(text)
+                grok_reply, grok_error = ask_grok(text)
                 if grok_reply:
                     # Ограничиваем длину (лимит сообщения в Telegram ~4096)
                     if len(grok_reply) > 4000:
                         grok_reply = grok_reply[:3997] + "..."
                     bot.send_message(message.chat.id, grok_reply)
                 else:
-                    bot.send_message(
-                        message.chat.id,
-                        "Сейчас не удалось получить ответ. Попробуйте позже или выберите кнопку: «О нас» или «Кейсы».",
-                    )
+                    msg = grok_error or "Сейчас не удалось получить ответ. Попробуйте позже или выберите кнопку: «О нас» или «Кейсы»."
+                    bot.send_message(message.chat.id, msg)
             else:
                 bot.send_message(
                     message.chat.id,
